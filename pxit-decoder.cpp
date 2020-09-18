@@ -22,6 +22,14 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.*/
 
+/* pxit-decoder is used to verify that an image sequence can be decoded.
+ * The purpose of the program is to pass a sequence of graphic images to
+ * an object of type ImageProcessor that analyzes frames, performs checksums,
+ * and builds received files.
+ * 
+ * pxit-decoder is used for debugging.
+ */
+
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -32,17 +40,13 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.*/
 #include "TargaImage.h"
 #include "ImageProcessor.h"
 
-
-
 int main(int argc, char *argv[]){
 
-    //Validate inputs.  Expect only a path to the input file.
+    //Validate inputs.
     if(argc != 2) {
-        printf("Usage: %s <path to input>\n",argv[0]);
+        printf("Usage: %s <path to input directory>\n",argv[0]);
         return 0;
     }
-    
-    printf("\t**********Welcome to pxit-decoder**********\n\n");  
     
     //Validate input. Can we access the directory?
     DIR *dir;
@@ -50,8 +54,12 @@ int main(int argc, char *argv[]){
         printf("Unable to open directory %s\n",argv[1]);
         return 0;
     }
- 
-    chdir(argv[1]);  //change working directory
+    
+    //We found the directory containing an image sequence to decode.
+    printf("\t**********Welcome to pxit-decoder**********\n\n");  
+    
+    //Change working directory to the input directory.
+    chdir(argv[1]);
     
     //Create object that converts images into a file
     ImageProcessor *processor = new ImageProcessor();
@@ -64,10 +72,12 @@ int main(int argc, char *argv[]){
         strcpy(buf,entry->d_name);
         char *ptr = buf + strlen(buf)-4;
 
+        //if the file extension is .tga
         if(!strcmp(ptr, ".tga")) {
+            
+            //Open the image file and get a pointer to the bitmap
             TargaImage *tga = new TargaImage(buf,width,height);
-            //extract image bitmap
-            int *frame = (int *)tga->getFrame();
+            int *frame = (int *)tga->getFrame();    //the bitmap
             
             /* ******************************************** */
             processor->processImage(frame);

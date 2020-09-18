@@ -3,13 +3,13 @@
 
 class TargaImage {
 public:
-	TargaImage(int Width, int Height);  //Used to create Targa file.
+	TargaImage(int Width, int Height);  //Used to create empty TARGA file.
 	TargaImage(char *filename, int width, int height); //Used to read file.
-
+    
+	void  displayHeader();
 	long *getFrame();
-	void fillBox(int top, int bottom, int left, int right, long color);
-	void writeFile(char *filename, int bpp = 32);
-	void displayHeader();
+	void  fillBox(int top, int bottom, int left, int right, long color);
+	void  writeFile(char *filename, int bpp = 32);
 
 private:
 	long *frame;

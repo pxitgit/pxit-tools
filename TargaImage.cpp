@@ -25,7 +25,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-//#include <windows.h>
 
 #include "TargaImage.h"
 
@@ -241,9 +240,6 @@ void TargaImage::readheader(FILE *tga) {
     printf("bpp = %d, misc = %x\n",header.bpp, header.misc);
     exit(0);
   }
-
-//debug 
-displayHeader();
 }//end readHeader
 
 void TargaImage::displayHeader() {
@@ -258,12 +254,6 @@ void TargaImage::displayHeader() {
     printf("bpp = %d, misc = %x\n",header.bpp, header.misc);
 }
 
-/*
-int TargaImage::makeColor(int red, int green, int blue){
-  int color = 0xFF000000 | (red<<16) | (green<<8) | blue;
-  return color;
-}
-*/
 
 
 

@@ -36,156 +36,106 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.*/
 #include "TargaImage.h"
 #include <errno.h>
 
+//Macros
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 
- 
-int flag = 0;
-void showSamplePoints(int *frame);
+//Constants
+const int verbose = 0;  //produce verbose output
 
-void yuv2rgb(u_char *buf, int *frame);
+//Function prototypes
+int  initializeDevice(int *nBuffers);        //Returns file descriptor to capture device. The number
+                                            //of frame buffers available in the hardware RAM is returned.
+                                            
+void showSamplePoints(int *frame);          //Create an image indicating sample points
+int  validateInputs(int argc, char **argv); //Make sure we have a valid directory to write into
+void yuv2rgb(u_char *buf, int *frame);      //Convert from YUV to RGB color spaces.
 
-void *handler(void *arg) {
-    printf("handler called\n");
-    char ans[10];
-    while(1) {
-        //sleep(1);
-        scanf(" %s",ans);
-        flag = 1;
-        printf("tick\n");
- 
-    }
-}
-
-
-int main(int argc, char *argv[]) {
-    
-    //Validate inputs.  Expect only a path to the output directory.
+int validateInputs(int argc, char **argv) {
     if(argc != 2) {
         printf("Usage: %s <path to output directory>\n",argv[0]);
         return 0;
-    }
+    } 
 
-    //Validate input. Can we access the directory?
+   //Can we access the directory?
     DIR *dir;
     if ((dir = opendir (argv[1])) == NULL) {
         printf("Unable to open directory %s\n",argv[1]);
         return 0;
     }
- 
+    
+    //Can we change the working directory?
     if(chdir(argv[1]) == -1) { //change working directory   
         printf("Unable to change directory to %s\n",argv[1]);
         perror("chdir");
         return 0;
     }
 
-    //create a thread to handle user inputs
-    pthread_t thread;
+    //Everything looks good.  Return success.
+    return 1;    
+}
 
-
-    if(pthread_create(&thread,NULL,handler,NULL)) {
-        perror("pthread_create");
-        return 0;
-    }
-
-
-    printf("\t******Welcome to pxit-capture*******\n\n");  
-    
-    int fd;  //file descriptor for video capture device
-    struct v4l2_buffer buffer;                //info on buffer in device RAM
-    struct v4l2_capability cap;             //capture device capabilities     
+int initializeDevice(int *nbuffers) {
+    struct v4l2_capability cap;             //capture device capabilities 
     struct v4l2_format format;              //specify video stream format
     struct v4l2_requestbuffers bufrequest;   //ask for device-based buffer
- 
-
-
-    struct ram {                            //Memory mapped RAM
-        void *start;
-        size_t length;
-    } *buffers;
-
-    TargaImage *tga = new TargaImage(720,480);  //useful for debugging
-
-    ImageProcessor *processor = new ImageProcessor();  
-
-    
-    int *frame = (int *)tga->getFrame();  //use memory from TARGA object
-
+    v4l2_std_id std_id;
+        
     //Open the video capture device
+    int fd;
     if((fd = open("/dev/video0", O_RDWR)) < 0){
         perror("open");
         printf("Check video device.\n");
-        exit(1);
+        return -1;
     }
     
     //Make sure the device can capture streaming video
     if(ioctl(fd, VIDIOC_QUERYCAP, &cap) < 0){ //Get device capabilities
         perror("VIDIOC_QUERYCAP");
-        exit(1);
+        return -1;
     }
     
     if(!(cap.capabilities & V4L2_CAP_VIDEO_CAPTURE)){
         fprintf(stderr, "Device lacks capture capability.\n");
-        exit(1);
+        return -1;
     }
     if(!(cap.capabilities & V4L2_CAP_STREAMING)){
         fprintf(stderr, "Device lacks streaming capabilite.\n");
-        exit(1);
+        return -1;
     }
     
-    // *********************************************************
-    struct v4l2_input input;
-struct v4l2_standard standard;
+    //If verbose is set, list all the formats supported by the 
+    //current input.
+    if(verbose) {
+        struct v4l2_input input;
+        struct v4l2_standard standard;
+        memset(&input, 0, sizeof(input));
 
-memset(&input, 0, sizeof(input));
+        if (-1 == ioctl(fd, VIDIOC_G_INPUT, &input.index)) {
+            perror("VIDIOC_G_INPUT");
+        }
 
-if (-1 == ioctl(fd, VIDIOC_G_INPUT, &input.index)) {
-    perror("VIDIOC_G_INPUT");
-    exit(EXIT_FAILURE);
-}
+        if (-1 == ioctl(fd, VIDIOC_ENUMINPUT, &input)) {
+            perror("VIDIOC_ENUM_INPUT");
+        }
 
-if (-1 == ioctl(fd, VIDIOC_ENUMINPUT, &input)) {
-    perror("VIDIOC_ENUM_INPUT");
-    exit(EXIT_FAILURE);
-}
+        printf("Current input is %s. It supports the following standards:\n", input.name);
 
-printf("Current input %s supports:\n", input.name);
+        memset(&standard, 0, sizeof(standard));
+        standard.index = 0;
 
-memset(&standard, 0, sizeof(standard));
-standard.index = 0;
-
-while (0 == ioctl(fd, VIDIOC_ENUMSTD, &standard)) {
-    if (standard.id & input.std)
-        printf("%s\n", standard.name);
-
-    standard.index++;
-}
-
-
-    
- printf("set standard to ntsc\n");   
- //set standard to NTSC
-v4l2_std_id std_id;
-std_id = V4L2_STD_NTSC;   
-if (-1 == ioctl(fd, VIDIOC_S_STD, &std_id)) {
-    perror("VIDIOC_S_STD");
-    exit(EXIT_FAILURE);
-}
-
-memset(&standard, 0, sizeof(standard));
-standard.index = 0;
-
-while (0 == ioctl(fd, VIDIOC_ENUMSTD, &standard)) {
-    if (standard.id & std_id) {
-           printf("Current video standard: %s\\n", standard.name);
-          break;
+        while (0 == ioctl(fd, VIDIOC_ENUMSTD, &standard)) {
+            if (standard.id & input.std) printf("%s\n", standard.name);
+            standard.index++;
+        }
     }
-
-    standard.index++;
-}
-
-//Display current video standard
-
-printf("now set video format\n");
+    
+    //Set video standard to NTSC
+    std_id = V4L2_STD_NTSC;   
+    if (-1 == ioctl(fd, VIDIOC_S_STD, &std_id)) {
+        perror("VIDIOC_S_STD");
+        return -1;
+    }
+    
     //Set video format for the device. 
     format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     format.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
@@ -193,55 +143,71 @@ printf("now set video format\n");
     format.fmt.pix.height = height;
     if(ioctl(fd, VIDIOC_S_FMT, &format) < 0){
         perror("VIDIOC_S_FMT");
-        exit(1);
-    }
-        // *********************************************************
-    //Set the frame rate if the devlce supports it
-    struct v4l2_streamparm streamparm;
-    CLEAR(streamparm);
-
-    streamparm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    if(ioctl(fd, VIDIOC_G_PARM, &streamparm) < 0) {
-        perror("VIDIOC_G_PARM");
-        exit(1);
+        return -1;
     }
     
-    if(!(streamparm.parm.capture.capability & V4L2_CAP_TIMEPERFRAME)) {
-        //Device allows frame rate setting
-        auto &tpf = streamparm.parm.capture.timeperframe;
-        //Set frame rate to 29.97 for NTSC TV
-        tpf.numerator = 1001;
-        tpf.denominator = 30000;
-        ioctl(fd,VIDIOC_S_PARM,&streamparm);
-    } else {
-        printf("Device does not allow frame rate setting\n");
-    }
-    
-    
-   //Ask the driver to allocate buffers on device RAM
+    //Ask the driver to allocate buffers on device RAM
     bufrequest.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     bufrequest.memory = V4L2_MEMORY_MMAP;
-    bufrequest.count = 32;
+    bufrequest.count = 32;      //#max on our device
     if(ioctl(fd, VIDIOC_REQBUFS, &bufrequest) < 0){
         perror("VIDIOC_REQBUFS");
-        exit(1);
+        return -1;
     }
     
-    int nbuffers = bufrequest.count;
-    printf("Obtained %d buffers on capture device\n",nbuffers);
+    //This is what we actually got.
+    *nbuffers = bufrequest.count;
     
-    //Get RAM for array of addresses mapped to device RAM   
-    buffers = (struct ram *)calloc(nbuffers, sizeof(*buffers));
+    return fd;
+}
+
+int main(int argc, char *argv[]) {
+    
+    //Validate input directory and change to it if possible.
+    if(!validateInputs(argc, argv)) return -1;
+    
+    //Initalize capture device.  Returns file descriptor to capture device.
+    int nbuffers;
+    int fd = initializeDevice(&nbuffers);
+    if(fd <=0) return -1;  //initializeDevice failed
+
+
+    printf("\t******Welcome to pxit-capture*******\n\n");  
+    printf("Using %d RAM buffers on capture device\n",nbuffers);
+    printf("Writing received files to %s\n",argv[1]);
+    
+
+  
+
+
+   //Note: 'frame' is a pointer to RAM within the a
+    //      TargaImage object.  This makes it easy to
+    //      take snapshots for diagnostic purposes.
+    TargaImage *tga = new TargaImage(720,480);  //useful for debugging
+    int *frame = (int *)tga->getFrame();  //use memory from TARGA object
+    
+    //This analyzes captured images.
+    ImageProcessor *processor = new ImageProcessor();  
+
+    //These are memory-mapped addresses of the device-resident RAM
+    struct ram_t {                            
+        void *start;
+        size_t length;
+    } *memoryMapInfo; 
+    
+    memoryMapInfo = (struct ram_t *)calloc(nbuffers, sizeof(ram_t));
     
     //Initialize and enqueue each H/W buffer
+    struct v4l2_buffer buffer;
     for(int i=0;i<nbuffers;i++) {
-        //Fill in part of a V4L2 buffer structure
+        
+        //Fill in part of a V4L2 buffer structure and ask the
+        //driver to fill in the rest.
         memset(&buffer, 0, sizeof(buffer));
         buffer.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         buffer.memory = V4L2_MEMORY_MMAP;
         buffer.index = i;
         
-        //Ask the driver to fill in the rest
         if(ioctl(fd, VIDIOC_QUERYBUF, &buffer) < 0){
             perror("VIDIOC_QUERYBUF");
             exit(1);
@@ -264,9 +230,8 @@ printf("now set video format\n");
         }
         
         //Now save the starting userspace address of buffer
-        buffers[i].start = buffer_start;
-        buffers[i].length = buffer.length;
-
+        memoryMapInfo[i].start = buffer_start;
+        memoryMapInfo[i].length = buffer.length;
         
         if(ioctl(fd, VIDIOC_QBUF, &buffer) < 0){
             perror("VIDIOC_QBUF");
@@ -275,128 +240,80 @@ printf("now set video format\n");
     }
     
     //Activate streaming
-    int type = buffer.type;
+    int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if(ioctl(fd, VIDIOC_STREAMON, &type) < 0){
         perror("VIDIOC_STREAMON");
         return 0;
     }
     
-    //Enter a loop that should run forever if there
-    //are no errors.  Wait for a filled video buffer,
-    //process it, and then return the buffer to the
-    //V4L2 driver
- 
 
+    /* *****************************************************/
+    /*              ENTER PROCESSING LOOP                  */
+    /* *****************************************************/
     int cycle=0;
     while(1) {
-        //Fill in a V4L2 buffer structure
-        memset(&buffer, 0, sizeof(buffer));
-        buffer.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        buffer.memory = V4L2_MEMORY_MMAP;
-        buffer.index = cycle;     //use buffers in order
-
-        //Get a filled image buffer from the V4L2 driver
+        
+        //Dequeue a buffer filled by the V4L driver
         if(ioctl(fd, VIDIOC_DQBUF, &buffer) < 0){
             perror("VIDIOC_DQBUF");
             return -1;
         }
       
-        //Note: 'frame' is a pointer to RAM within the a
-        //      TargaImage object.  This makes it easy to
-        //      take snapshots for diagnostic purposes.
+        //Do a color space transformation on the device-resident
+        //image and write the RGB version to 'frame'.
+        yuv2rgb((u_char *)memoryMapInfo[cycle].start,frame);
         
-        yuv2rgb((u_char *)buffers[cycle].start,frame);
+        //Let the image processor examine the frame.
         int rtn = processor->processImage(frame);
         
-        
-        if(rtn == -1) {
-            printf("Checksum failed after first good one\n");
-            showSamplePoints(frame);
-            char filename[100];
-            strcpy(filename, "/home/frank/pxit-tools/capturedFrame.tga");
-            tga->writeFile(filename);
-            
-          
-            //We should have 32 frames captured.
-            for(int i=0;i<nbuffers;i++) {
-                 //Convert format from YUV2 to RGB
-                yuv2rgb((u_char *)buffers[i].start,frame);
-                processor->processImage(frame);
-
+        if(rtn == -1) { 
+            if(verbose) {
+                printf("Checksum failed after first good one\n");
+                showSamplePoints(frame);
                 char filename[100];
-                sprintf(filename, "/home/frank/pxit-tools/capturedFrame%2d.tga",i);
-                printf("create targa file %s\n",filename);
+                strcpy(filename,argv[1]);
+                strcat(filename,"-failedFrame.tga");
                 tga->writeFile(filename);
+                printf("Dumped failing image to %s\n",filename);
+                return 0;  //We have to stop.  Depending on the vide source
+                           //there may be nothing but bad checksums from here on.
             }
-            return 0;
-
         }
         
-
-
-        
- /*        if(first) {
-            showSamplePoints(frame);
-            char filename[100];
-            strcpy(filename, "/home/frank/pxit-tools/capturedFrame.tga");
-            tga->writeFile(filename);
-            first = false;
-        }*/
-        
-        //Return buffer to driver
-        //memset(buffers[cycle].start,0, buffers[cycle].length); //BUG BUG.  This shouldn't be zeroed.
-        
+        //Return the buffer to the driver.
         if(ioctl(fd, VIDIOC_QBUF, &buffer) < 0){  
             perror("VIDIOC_QBUF");
             return 0;
         } 
 
-      
-        cycle++;
-        if(cycle >= nbuffers) cycle=0;  
-        if(flag == 1) {
-            //Produce diagnostics 
-            showSamplePoints(frame);
-            char filename[100];
-            strcpy(filename, "/home/frank/pxit-tools/capturedFrame.tga");
-            tga->writeFile(filename);
-            flag = 0;
-        }
-    }
-        
-
-    
-    
-    
-    //We should have 32 frames captured.
-    for(int i=0;i<nbuffers;i++) {
-         //Convert format from YUV2 to RGB
-
-         
-        yuv2rgb((u_char *)buffers[i].start,frame);
-                processor->processImage(frame);
-
-        char filename[100];
-            sprintf(filename, "/home/frank/pxit-tools/capturedFrame%2d.tga",i);
-            printf("create targa file %s\n",filename);
-            tga->writeFile(filename);
+        //Cycle through the buffers
+        if(++cycle >= nbuffers) cycle=0;  
     }
 }
 
-void yuv2rgb(u_char *buffer_start, int *frame) {
+/* 
+ * yuv22rgb converts an image from YUV to RGB color spaces. A pointer to the
+ * image in YUV format is input.  The program returns the converted image in 'rgb'.
+ */
+ 
+void yuv2rgb(u_char *yuv, int *rgb) {
     int Y, U, V;            
 
+    //Loop over every pixel in the image (though we don't have to)
     for(int row=0;row<height;row++) {
         for(int col=0;col<width;col++) {
-            int z = row*width + col;                  //offset into linear array of pixels
-            u_char  *yptr = (u_char *)buffer_start + 2 * z;     //pointer to luminance of pixel at (r,c).
-            Y = *yptr;							      //Luminance value
             
-            //compute u and v values
-            if (z & 1) { //pixel number is odd
-                U = *(yptr - 1);
+            int z = row*width + col;                     //pixel number
+            
+            u_char  *yptr = (u_char *)yuv + (2 * z);     //pointer to luminance 
+            
+            Y = *yptr;							               //Luminance value
+            
+            //Compute u and v values for every pixel in the image
+            if (z & 1) { 
+                U = *(yptr - 1);    //U and V values surround the luminance value for odd numbered pixels.
                 V = *(yptr + 1);
-            } else {
+            } else {                //U and V values follow the luminance value for even numbered pixels.
                 U = *(yptr + 1);
                 V = *(yptr + 3);
             }
@@ -414,13 +331,13 @@ void yuv2rgb(u_char *buffer_start, int *frame) {
             if (G > 255) G = 255; else if (G < 0) G = 0;
             if (B > 255) B = 255; else if (B < 0) B = 0;
             
-            //Now copy these RGB components into frame
-            int color = 0xFF;   color <<= 8; //alpha
-            color |= R;         color <<=8;  //red
+            //Now copy these RGB components into rgb
+            int color = 0xFF;   color <<= 8; //alpha (transparency)
+            color |= R;         color <<= 8; //red
             color |= G;         color <<= 8; //greem
             color |= B;                      //blue
             
-            *(frame + z) = color;
+            *(rgb + z) = color;
         }
     }
 }
@@ -428,8 +345,8 @@ void yuv2rgb(u_char *buffer_start, int *frame) {
 void showSamplePoints(int *frame) {
     
     //Annotate the output. Put dots at encoding sample points.
-    //Measurements taken from captureing test images and observing
-    //color cell locations
+    
+    //Loop over the 45x30 array of color cells
     for (int celrow= 0; celrow <= 29; celrow++) {
         for (int celcol = 0; celcol <= 44; celcol++) { //loop over cell numbers
             float x = celcol * cellsize;
@@ -444,11 +361,7 @@ void showSamplePoints(int *frame) {
             iy = (int)(y + 0.5);
                   
             int z = iy * width + ix;
-            *(frame + z) = 0xFF00FFFF;
-
+            *(frame + z) = 0xFF000000;
         }
     }
 }
-
-
- 

@@ -23,7 +23,9 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.*/
 
- /*
+/* pxit-encoder converts an arbitrary file into a sequence of numbered
+ * graphics image files in TARGA format.
+ *
  * Specifications:
  *  image resolution: 720x480  pixels (width x height)
  *  cell size: 16x16.  cells completely cover screen
@@ -44,9 +46,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.*/
  *  path to input file supplied on command line
  *  images are created in the same directory as the input file.
  * 
- * Author:
- *  Frank J. LoPinto
- *  July, 2020
+ * pxit-endoder is used for production.
  * 
  */
  
@@ -57,18 +57,13 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.*/
 #include <string.h>
 #include <unistd.h>
 #include <libgen.h>
-
 #include "checksum.h"
 #include "TargaImage.h"
 #include "pxit-parms.h"
 
 
-const int b1 = 4;		//  4s place
-const int b2 = b1 * 4;	// 16s place
-const int b3 = b2 * 4;	// 64s place
-const int b4 = b3 * 4;	//256s place
 
-int *frame; //holds a bitmap image
+int *frame; //holds a bitmap
 void drawCell(int row_, int col_, int color);
 
 int main(int argc, char *argv[]){
@@ -80,7 +75,7 @@ int main(int argc, char *argv[]){
     }
 
     printf("\t**********Welcome to pxit-encoder**********\n\n");  
-    printf("\tProcessing %s\n",argv[1]);
+    printf("\tConverting %s into image files\n\n",argv[1]);
     
     //Validate input. Can we access the file?
     char dir[200], base[200];
@@ -101,21 +96,23 @@ int main(int argc, char *argv[]){
         rewind(fp);
     }
     
-    //Create a Targa object and get a pointer to its buffer
+    //Create a Targa object and get a pointer to its bitmap
 	TargaImage *tga = new TargaImage(width, height);
     frame = (int *)tga->getFrame();
+    
+    //create an object that can compute error-correcting codes
+	CheckSum *checksum = new CheckSum(packetSize);
     
     //convert filesize to three bytes
 	unsigned char hi =  (unsigned char)(filesize >> 16);
 	unsigned char med = (unsigned char)(filesize >> 8);
 	unsigned char lo =  (unsigned char) filesize;
     
-	//create an object that can compute error-correcting codes
-	CheckSum *checksum = new CheckSum(packetSize);
 
-	//Now create as many images as needed to encode the selected input file
-	int framesNeeded = filesize / blockSize;  //global so it can be seen by the thread
-	if (blockSize * framesNeeded < filesize) framesNeeded++;
+	//Compute the number of images as needed to encode the selected input file
+	int framesNeeded = filesize / blockSize; 
+	if (blockSize * framesNeeded < filesize) 
+        framesNeeded++;  //The last frame will be partially filled
 
  	int frameNumber = 0;
 	int blockSequence = 0;
@@ -136,9 +133,11 @@ int main(int argc, char *argv[]){
 		int indlo = blockSequence & 0xFF;
 		packet[3] = indhi;
 		packet[4] = indlo;
-		blockSequence++;
+        
+		blockSequence++;  //prepare for next block
 
-        //Read a data block from file and copy it to packet.
+        //Read a data block from file and copy it to packet
+        //following the header (5 bytes)
         int bytesRead = fread(packet+5,1,blockSize,fp);
   
         if(bytesRead < blockSize) { //We didn't get a full block
@@ -155,68 +154,69 @@ int main(int argc, char *argv[]){
         //Compute checksum
         checksum->compute(packet, packetSize);
        
-		//convert the bytes into a pixelstream
+       
+       /* At this point we have a complete date packet.  We now have to 
+        * "paint a picture".  The packet is a sequence of bytes.  Each byte
+        * is a sequence of four two-bit symbols.  The symbols are one digit
+        * numbers in the Base 4 system: 00, 01, 10, 11.  The numerals we
+        * use are actually colors: red, white, blue, and green, respectively.
+        * We call this stream of colors a 'pixelstream'.
+        */
+
 		int cell = 0;
 		for (int i = 0; i < packetSize; i++) {
+            
+            const int b1 = 4;		//  4s place
+            const int b2 = b1 * 4;	// 16s place
+            const int b3 = b2 * 4;	// 64s place
+			int base4digit[4];
 
-			int x = packet[i];  //get a byte
+            //start with a byte
+			int byte = packet[i];
 
-			//convert x to base 4
-			int digit[4];
-			digit[0] = x / b3;
-			x -= b3*digit[0];
+			//convert the byte into four base 4 base4digita
+			base4digit[0] = byte / b3;
+			byte -= b3*base4digit[0];
 
-			digit[1] = x / b2;
-			x -= b2*digit[1];
+			base4digit[1] = byte / b2;
+			byte -= b2*base4digit[1];
 
-			digit[2] = x / b1;
-			x -= b1*digit[2];
+			base4digit[2] = byte / b1;
+			byte -= b1*base4digit[2];
 
-			digit[3] = x;
+			base4digit[3] = byte;
 
-			pixelstream[cell]	  = (unsigned char)digit[0];
-			pixelstream[cell + 1] = (unsigned char)digit[1];
-			pixelstream[cell + 2] = (unsigned char)digit[2];
-			pixelstream[cell + 3] = (unsigned char)digit[3];
+			pixelstream[cell]	  = (unsigned char)base4digit[0];
+			pixelstream[cell + 1] = (unsigned char)base4digit[1];
+			pixelstream[cell + 2] = (unsigned char)base4digit[2];
+			pixelstream[cell + 3] = (unsigned char)base4digit[3];
 
 			cell += 4;
 		}
         
-        //Now create the image by assigning colors to the squres
-        //Loop through the areas.  For each color the cells according to the data in pixelstream
+        /* Now create the image by assigning colors to the squares based on the array 
+         * pixelstream.  The image will display a 45x30 array of color cells.
+         */
+
 		cell = 0;
 		
-        for (int cy = 0; cy <= 29; cy++) {
-            for (int cx = 0; cx <= 44; cx++) { //loop over cell numbers
-                drawCell(cy, cx, pixelstream[cell]);
+        for (int cy = 0; cy <= 29; cy++) {              //for every row
+            for (int cx = 0; cx <= 44; cx++) {          //for every colums
+                drawCell(cy, cx, pixelstream[cell]);    //draw a solid square
                 cell++;
             }
         }
 		
+        //form a filename using frame number and save the image.
         char tmp[256];
         sprintf(tmp,"%s-%02d.tga",base,frameNumber);
-        printf("create %s\n",tmp);
         tga->writeFile(tmp);
 
-        //Get ready for next frame.
-        frameNumber++;
+        frameNumber++;  //prepare for nexe frame.
             
     }//end while
     
-    //For debugging hold the last frame for 3 seconds.
-    
     printf("\t%d images produced. File conversion complete.\n\n",frameNumber);
-    
-    frameNumber--;
-    
-    //hold last frame for 3 seconds
-    for(int i=0;i<90;i++) {
-        char tmp[256];
-        sprintf(tmp,"%s-%02d.tga",base,frameNumber++);
-        tga->writeFile(tmp);
-
-    }
-
     return 0;
 }
 
@@ -225,10 +225,11 @@ void drawCell(int row_, int col_, int value) {
 	//Note: (row_, col_) refer to rows and columns in the rectangular array of cells.
 	//      (row , col ) refer to pixel coordinates within an image.
 
+    //convert cell array coordinates to image pixel coordinates
 	int row = row_*cellsize;
 	int col = col_*cellsize;
 
-    int pxvalue;  //pixel color expressed as an integer.
+    int pxvalue;  //pixel color expressed as an integer between 0 and 3.
     
 	switch (value) {  //2-bit value that the cell should represent
         case 0: pxvalue = 0xFFFF0000; break; //red
@@ -236,9 +237,11 @@ void drawCell(int row_, int col_, int value) {
         case 2: pxvalue = 0xFF0000FF; break; //blue
         case 3: pxvalue = 0xFF00FF00; break; //green
         default:
+                //This should never happen.
                 pxvalue = 0xFF000000;        //black
 	}
 
+    //Color in the cell
 	for (int r = row; r<row + cellsize; r++) {
 		for (int c = col; c<col + cellsize; c++) {
 			*(frame + r*width + c) = pxvalue;

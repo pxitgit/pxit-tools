@@ -30,7 +30,6 @@ ImageProcessor::ImageProcessor() {  //Convert stream of images into a file
     checksum = new CheckSum(packetSize);
 }
 
-
 ImageProcessor::~ImageProcessor() {delete checksum;}
 
 void ImageProcessor::getDataPacket(char *pixelstream, unsigned char* packet) {
@@ -124,7 +123,7 @@ int ImageProcessor::processImage(int *frame) {
 	if(filelength != previous && previous != 0) 
         resetDecoder();     //yes. prepare to decode a new file
     else if(fileComplete)   
-        return 0;             //no. ignore this packet.
+        return 0;           //no. ignore this packet.
 
     //Is this the first packet we've seen from the file?
     if(!gotFirstFrame) {
@@ -157,8 +156,8 @@ int ImageProcessor::processImage(int *frame) {
 
     //have we seen this sequence number before?
     if (!BlockFlags[sequence]) {
+        
         //No, this is a new one. Update records
-        printf("Got sequence %d\n",sequence);
         BlockFlags[sequence] = true;	//We just got a new block
         nBlocksFound++;
 
